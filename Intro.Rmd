@@ -1,0 +1,281 @@
+---
+title: "Introduction to model fitting in R"
+author: "Sam Abbott"
+date: "27/09/2016"
+output: html_document
+toc: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE)
+```
+
+# Introduction
+[**Lecture slides**](http://sbfnk.github.io/mfiidd/slides/intro_slides.pdf)
+
+This courses uses the fit R package and I will draw from the tidyverse for additional code
+
+```{r load packages, echo=TRUE, message=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+```
+
+![Outline of the course](figures/Course_Outline.png)
+
+#Objectives
+
+- familiarise with the stucture of models in the fitR package
+- combine prior and likelihood to calculate the posterior of a simple SIR model
+- explore the posterior of a model that has a single parameter
+
+
+![Summary of the general model fitting process](figures/Model_Fitting_process.png)
+
+![Summary of the bayesian model fitting process](figures/Bayesian_Model_Fit.png)
+
+#Deterministic SIR model
+
+
+```{r load models}
+
+#Load SIR model and investigate structure
+data(SIR)
+names(SIR)
+
+#contents of the SIR model
+SIR
+```
+
+#Simulate
+
+```{r simulate SIR}
+#Load parameters
+theta <- c(R0 = 3, D_inf = 2)
+init.state <- c(S = 999, I = 1, R = 0)
+times <- 1:100
+
+#Simulate model
+traj <- SIR$simulate(theta, init.state, times) %>% as_data_frame
+
+#Output of run
+head(traj)
+
+#Plot simulations
+plotTraj(traj)
+```
+
+#Prior
+
+To evaluate the log of the prior for a certain combination of parameters 
+
+```{r prior SIR}
+SIR$dprior(theta)
+SIR$dprior(theta, log = TRUE)
+```
+
+#Likelihood
+
+evaluate the likelihood of a data point
+
+```{r likelihood SIR}
+SIR$dPointObs(data.point = c(obs = 18), model.point = c(I = 31), theta, log = TRUE)
+```
+
+
+```{r outbreak data SIR}
+data(epi)
+head(epi1)
+plotTraj(data = epi1)
+dTrajObs(SIR, theta, init.state, epi1, log = TRUE)
+```
+
+#Generate observations
+add measurement uncertainty
+
+```{r simulate with uncertainty SIR}
+SIR$rPointObs(model.point = c(I = 31), theta)
+
+obs.traj <- rTrajObs(SIR, theta, init.state, epi1$time) %>% as_data_frame
+
+obs.traj
+```
+
+#Calculate the posterior
+
+```{r Posterior function}
+
+# This is a function that takes 4 arguments:
+# - fitmodel, a fitmodel object that defines the model dynamics,
+#   prior and likelihoods.
+# - theta, a named vector of parameters
+# - init.state,  a named vector of initial state
+# - data, the data set we are fitting the model to
+# It should return the posterior for the given model, parameters,
+# initial state and data.
+my_dLogPosterior <- function(fitmodel, theta, init.state, data) {
+
+    log.prior <- fitmodel$dprior(theta, log=TRUE)
+
+    log.likelihood <- dTrajObs(fitmodel, theta, init.state, data, log=TRUE)
+    
+    log.posterior <- log.likelihood -   log.prior
+
+    return(log.posterior)
+}
+
+#Check
+my_dLogPosterior(SIR, theta, init.state, epi1)
+```
+
+# Assess the model fit
+
+```{r model fit, results=FALSE, message=FALSE, include=FALSE}
+
+plot_fit <- plotFit(SIR, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+```
+
+```{r plot model fit}
+#plot_fit <- plotFit(SIR, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+plot_fit$plot
+```
+
+#Explore the posterior
+
+```{r explore distributions, results=FALSE, message=FALSE}
+#Switch to normally distributed priors
+SIR$dprior <- function(theta, log = FALSE) {
+
+    ## uniform prior on R0: U[1,100]
+    log.prior.R0 <- dnorm(theta[["R0"]], mean=10, log = TRUE)
+    ## uniform prior on infectious period: U[0,30]
+    log.prior.D <- dnorm(theta[["D_inf"]], mean=15, log = TRUE)
+
+    log.sum <- log.prior.R0 + log.prior.D
+
+    return(ifelse(log, log.sum, exp(log.sum)))
+}
+
+#Switch to normal distributed observation error
+SIR$dPointObs <- function(data.point, model.point, theta, log = FALSE) {
+    # the prevalence is observed through a normally distributed process
+    return(dnorm(x = data.point[["obs"]], mean = model.point[["I"]], log = log))
+}
+```
+
+```{r explore model, results=FALSE, message=FALSE, include=FALSE}
+#Explore effect this has
+plot_fit <- plotFit(SIR, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+```
+
+```{r plot explore dist}
+#plot_fit <- plotFit(SIR, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+plot_fit$plot
+```
+
+#Going Further
+
+## Imperfect reporting of cases
+
+```{r Imperfect reporting}
+epi2 %>% as_data_frame
+```
+
+
+## Include demographic process and seasonal forcing
+
+- added natural birth death 
+- added forcing
+```{r SIR_bd_forced}
+SIR_bd_forced <- SIR 
+
+#Change model name
+SIR_bd_forced$name <- 'SIR model with seasonal forcing and natural birth/death'
+
+#Add forcing function 
+ SIR_bd_forced$forcing <- function(time, parameters){
+   1+parameters[['amplitude']]*sin(2*pi*time/parameters[['period']])
+ }
+ 
+#Add new parameters
+SIR_bd_forced$theta.names <- c(SIR_bd_forced$theta.names, 'b','d', 'period', 'amplitude')
+
+#Adjust model
+SIR_bd_forced$simulate <- function (theta, init.state, times) 
+{
+    SIR_ode <- function(time, state, parameters) {
+        beta <- parameters[["R0"]]/parameters[["D_inf"]]
+        nu <- 1/parameters[["D_inf"]]
+        S <- state[["S"]]
+        I <- state[["I"]]
+        R <- state[["R"]]
+        N <- S + I + R
+        dS <- -beta * SIR_bd_forced$forcing(time, parameters) * S * I/N + parameters[['b']]*N - parameters[['d']]*S
+        dI <- beta * SIR_bd_forced$forcing(time, parameters) * S * I/N - nu * I - parameters[['d']]*I
+        dR <- nu * I - parameters[['d']]*R
+        return(list(c(dS, dI, dR)))
+    }
+    trajectory <- data.frame(ode(y = init.state, times = times, 
+        func = SIR_ode, parms = theta, method = "ode45"))
+    return(trajectory)
+}
+
+#Add new priors
+SIR_bd_forced$dprior <- function (theta, log = FALSE) 
+{
+    log.prior.R0 <- dnorm(theta[["R0"]], mean = 10, log = TRUE)
+    log.prior.D <- dnorm(theta[["D_inf"]], mean = 15, log = TRUE)
+    log.prior.b <- dnorm(theta[["b"]], mean = 0.05, log = TRUE)
+    log.prior.d <- dnorm(theta[["d"]], mean = 0.05, log = TRUE)
+    log.prior.period <- dnorm(theta[["period"]], mean = 1, log = TRUE)
+    log.prior.period <- dnorm(theta[["amplitude"]], mean = 0, log = TRUE)
+    log.sum <- log.prior.R0 + log.prior.D + log.prior.b +  log.prior.d +  log.prior.period
+    return(ifelse(log, log.sum, exp(log.sum)))
+}
+```
+
+```{r update parameters - b/d, results=FALSE, message=FALSE}
+#Load parameters
+theta <- c(R0 = 2, D_inf = 2, b=1/80, d=1/80, period=1, amplitude=0)
+init.state <- c(S = 999, I = 1, R = 0)
+times <- 1:100
+```
+
+```{r sim update parameters - b/d, include=FALSE}
+#Explore effect this has - just birth death
+plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+plot_fit$plot
+```
+
+```{r update parameters - forced, results=FALSE, message=FALSE}
+#Load parameters
+theta <- c(R0 = 2, D_inf = 2, b=0, d=0, period=10, amplitude=0.5)
+init.state <- c(S = 999, I = 1, R = 0)
+times <- 1:100
+```
+
+```{r update sim - forced, include=FALSE}
+#Explore effect this has - just birth death
+plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+plot_fit$plot
+```
+
+```{r update parameters - b/d, forced, results=FALSE, message=FALSE}
+#both forcing and b/d
+#Load parameters
+theta <- c(R0 = 2, D_inf = 2, b=1/10, d=1/10, period=10, amplitude=0.5)
+init.state <- c(S = 999, I = 1, R = 0)
+times <- 1:100
+```
+
+```{r update sim - b/d, forced, include=FALSE}
+#Explore effect this has - just birth death
+plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+plot_fit$plot
+```
