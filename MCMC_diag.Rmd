@@ -1,0 +1,281 @@
+---
+title: "MCMC diagnositics"
+author: "Sam Abbott"
+date: "28/09/2016"
+output: 
+  html_document:
+    number_sections: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, echo=TRUE, message=FALSE, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+
+#install.packages('coda')
+library(coda)
+```
+
+#Introduction
+
+[**Lecture slides**](http://sbfnk.github.io/mfiidd/slides/mcmc_slides2.pdf)
+
+- use MCMC to sample more than one parameter
+- learn how to use coda for assessing and interpreting MCMC runs
+- explore strategies for improving the performance of a Metropolis-Hastings sampler
+
+#Sampling more than one parameter
+
+```{r plot epi3 data, caption='Plot of epi3 data distribution'}
+plotTraj(data = epi3)
+```
+
+```{r Posterior function}
+
+# This is a function that takes 4 arguments:
+# - fitmodel, a fitmodel object that defines the model dynamics,
+#   prior and likelihoods.
+# - theta, a named vector of parameters
+# - init.state,  a named vector of initial state
+# - data, the data set we are fitting the model to
+# It should return the posterior for the given model, parameters,
+# initial state and data.
+my_dLogPosterior <- function(fitmodel, theta, init.state, data) {
+
+    log.prior <- fitmodel$dprior(theta, log=TRUE)
+
+    log.likelihood <- dTrajObs(fitmodel, theta, init.state, data, log=TRUE)
+    
+    log.posterior <- log.likelihood -   log.prior
+
+    return(log.posterior)
+}
+```
+
+```{r fixed posterior for initial conditions}
+my_dLogPosterior_epi3 <- function(theta) {
+
+    return(my_dLogPosterior(fitmodel = SIR,
+                            theta = theta,
+                            init.state = c(S = 999, I = 1, R = 0),
+                            data = epi3))
+
+}
+```
+
+```{r  multivariate MCMC sampler}
+# This is a function that takes four parameters:
+# - target: the target distribution, a function that takes one
+#   argument (a number) and returns the (logged) value of a
+#   distribution
+# - init.theta: the initial value of theta, a number
+# - proposal.sd: the standard deviation of (Gaussian) proposal
+#   distribution
+# - n.iterations: the number of iterations
+# The function returns a vector of samples of theta from the target
+# distribution
+my_mcmcMH <- function(target, init.theta, proposal.sd, n.iterations) {
+
+    # evaluate the function "target" at "init.theta", and assign to
+    # a variable called target.theta.current.
+    target.theta.current <- target(init.theta)
+
+    # initialise variables to store the current value of theta, the
+    # vector of samples, and the number of accepted runs
+    theta.current <- init.theta
+    samples <- theta.current
+    accepted <- 0
+
+    # run MCMC for n.iteration interations
+    for (i.iteration in seq_len(n.iterations)) {
+
+        # draw a new theta from the (Gaussian) proposal distribution
+        # and assign to a variable called theta.proposed.  
+        # See "?rnorm for more information
+        # Note that this step is vectorized for any arbitratry theta 
+        # which will be useful when we will sample from a multivariate
+        # target distribution
+        theta.proposed <- rnorm(n = length(theta.current),
+                                mean = theta.current,
+                                sd = proposal.sd)
+
+        # Note that 'rnorm' returns an unnamed vector, but the functions of
+        # 'fitmodel' need a named parameter vector. We therefore set
+        # the names of theta.proposed to be the same as the names of
+        # theta.current
+        names(theta.proposed) <- names(theta.current)
+
+        # evaluate the function target at the proposed theta and
+        # assign to a variable called target.theta.proposed
+        target.theta.proposed <- target(theta.proposed)
+
+        # compute Metropolis-Hastings ratio (acceptance probability). Since
+        # the multivariate Gaussian is symmetric, we don't need to consider
+        # the proposal distribution here
+        log.acceptance <- target.theta.proposed - target.theta.current
+
+        # draw random number number between 0 and 1 using "runif" and assign to
+        # a variable called r.
+        r <- runif(1)
+        
+        # test acceptance by comparing the random number to the
+        # Metropolis-Hastings ratio (acceptance probability) (using
+        # "exp" because we calculated the logarithm of the
+        # Metropolis-Hastings ratio before)
+        if (r < exp(log.acceptance)) {
+
+            # if accepted:
+            # change the current value of theta to the proposed theta
+            theta.current <- theta.proposed
+
+            # updated the current value of the target
+            target.theta.current <- target.theta.proposed
+
+            # update number of accepted proposals
+            accepted <- accepted + 1
+        }
+
+        # add the current theta to the vector of samples
+        # Note that we use `rbind` in order to deal with multivariate 
+        # target. So if `theta` is a vector then `samples` is a matrix.
+        samples <- rbind(samples, theta.current, deparse.level=0)
+    }
+
+    # return the trace of the chain (i.e., the vector of samples)
+    return(samples)
+}
+```
+
+```{r  run multivariate MCMC, cache=TRUE}
+trace <- my_mcmcMH(target = my_dLogPosterior_epi3, # target distribution
+                   init.theta = c(R0=1, D_inf=2), # intial parameter guess
+                   proposal.sd = c(0.01, 0.01), # standard deviation of
+                                      # Gaussian proposal: 0.1
+                   n.iterations = 10000) # number of iterations
+```
+
+#Diagnostics
+
+diagnositcs to assess mixing, burn-in and run length drawn from the coda package
+
+##Summary statistics
+
+```{r  convert to coda and summarise}
+mcmc.trace <- mcmc(trace)
+
+#Summarise
+summary(mcmc.trace)
+
+#Acceptance rates
+acceptanceRate <- 1 - rejectionRate(mcmc.trace)
+acceptanceRate
+
+#effective sample size - i.e number of independent samples 
+effectiveSize(mcmc.trace)
+```
+
+##Mixing
+
+### Trace and density plots
+
+```{r  plot traces, caption='Trace plots of mcmc run for SIR model'}
+plot(mcmc.trace)
+```
+
+We also see that the sampler never moves beyond 2.2 for $R_0$, and never beyond 3.5 for $D_inf$. To assess the reliability of our output, we should start chains with higher initial values of $R_0$ and $D_inf$ and check that the sampler converges to the same estimates.
+
+
+Can see a more detailed view of the trace using the burn and thin arguement
+
+```{r drop burn in}
+#this function is part of the fitR package
+mcmc.trace.burned <- burnAndThin(mcmc.trace, burn = 2000)
+plot(mcmc.trace.burned)
+```
+
+**It should look like a hairy catepillar**
+
+###Autocorrelations
+
+Another way to check for convergence is to look at the autocorrelations between the samples returned by our MCMC. The lag-kk autocorrelation is the correlation between every sample and the sample kk steps before. This autocorrelation should become smaller as kk increases, i.e. samples can be considered as independent. If, on the other hand, autocorrelation remains high for higher values of kk, this indicates a high degree of correlation between our samples and slow mixing.
+
+```{r  plot autocorrelation}
+#this function is part of the fitR package
+autocorr.plot(mcmc.trace.burned)
+```
+
+- thin if autocorrelation persists
+
+```{r  thin mcmc chain to deal with autocorreclation}
+mcmc.trace.burned.thinned <- burnAndThin(mcmc.trace.burned, thin = 5)
+autocorr.plot(mcmc.trace.burned.thinned)
+
+```
+
+There is some arguement that thinning is not actually useful and really just reduces memory demands as data is lost. A more useful, but memory intensive solution is to run the chain for additional time. This appraoch maximises the effectie sample size.
+
+###Burn-in
+
+- Burn in is optimsed by comparision with the effective sample size
+```{r  plot effective sample size against the burn in period to optimise}
+plotESSBurn(mcmc.trace)
+```
+
+###Run length
+
+Always run mulitple chains with differing initial conditions
+
+#Improving mixing
+
+##Dealing with parameters with limited support
+
+###Transforming parameters
+- force parameters to be positive by transforming them to the log scale
+
+```{r  logged SIR model}
+data(SIR_exp)
+```
+
+```{r  wrapper and MCMC run}
+my_dLogPosterior_exp_epi3 <- function(theta) {
+
+    return(my_dLogPosterior(fitmodel = SIR_exp,
+        theta = theta,
+        init.state = c(S = 999, I = 1, R = 0),
+        data = epi3))
+
+}
+
+trace <- my_mcmcMH(target = my_dLogPosterior_exp_epi3,
+    init.theta = c(R0 = log(1), D_inf = log(2)),
+    proposal.sd = c(0.1, 0.01),
+    n.iterations = 10000)
+```
+
+```{r  convert to coda and summarise - logged}
+mcmc.trace <- mcmc(trace)
+
+#Summarise
+summary(mcmc.trace)
+
+#Acceptance rates
+acceptanceRate <- 1 - rejectionRate(mcmc.trace)
+acceptanceRate
+
+#effective sample size - i.e number of independent samples 
+effectiveSize(mcmc.trace)
+```
+
+###Truncated proposal distributions
+
+- truncate to real world values

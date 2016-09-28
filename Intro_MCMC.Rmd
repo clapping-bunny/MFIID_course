@@ -1,0 +1,194 @@
+---
+title: "Sampling from an univariate distribution using MCMC"
+author: "Sam Abbott"
+date: "27/09/2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, echo=TRUE, message=FALSE, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+```
+
+#Introduction
+
+[**Lecture slides**](http://sbfnk.github.io/mfiidd/slides/mcmc_slides1.pdf)
+
+- code a basic MCMC algorithm sampling from a univariate distribution
+- check algorithm using a simple normal distribution
+- use it to sample from the posterior distribution of $R_0$
+
+#My first MCMC sampler
+
+```{r plot normal, caption='Plot of normal distribution'}
+df <- data_frame(y=seq(-5, 5, 0.01), x=dnorm(seq(-5, 5, 0.01), mean = 0, sd = 1))
+
+ggplot(df, aes(x=y, y=x)) + geom_smooth()
+```
+
+```{r MCMC sampler}
+# This is a function that takes four parameters:
+# - target: the target distribution, a function that takes one
+#   argument (a number) and returns the (logged) value of a
+#   distribution
+# - init.theta: the initial value of theta, a number
+# - proposal.sd: the standard deviation of (Gaussian) proposal
+#   distribution
+# - n.iterations: the number of iterations
+# The function returns a vector of samples of theta from the target
+# distribution
+my_mcmcMH <- function(target, init.theta, proposal.sd, n.iterations) {
+
+    # evaluate the function "target" at "init.theta", and assign to
+    # a variable called target.theta.current.
+    target.theta.current <- target(init.theta)
+
+    # initialise variables to store the current value of theta, the
+    # vector of samples, and the number of accepted runs
+    theta.current <- init.theta
+    samples <- theta.current
+    accepted <- 0
+
+    # run MCMC for n.iteration interations
+    for (i.iteration in seq_len(n.iterations)) {
+
+        # draw a new theta from the (Gaussian) proposal distribution
+        # and assign to a variable called theta.proposed.  
+        # See "?rnorm for more information
+        # Note that this step is vectorized for any arbitratry theta 
+        # which will be useful when we will sample from a multivariate
+        # target distribution
+        theta.proposed <- rnorm(n = length(theta.current),
+                                mean = theta.current,
+                                sd = proposal.sd)
+
+        # Note that 'rnorm' returns an unnamed vector, but the functions of
+        # 'fitmodel' need a named parameter vector. We therefore set
+        # the names of theta.proposed to be the same as the names of
+        # theta.current
+        names(theta.proposed) <- names(theta.current)
+
+        # evaluate the function target at the proposed theta and
+        # assign to a variable called target.theta.proposed
+        target.theta.proposed <- target(theta.proposed)
+
+        # compute Metropolis-Hastings ratio (acceptance probability). Since
+        # the multivariate Gaussian is symmetric, we don't need to consider
+        # the proposal distribution here
+                log.acceptance <- target.theta.proposed - target.theta.current
+
+        # draw random number number between 0 and 1 using "runif" and assign to
+        # a variable called r.
+        r <- runif(1)
+
+        # test acceptance by comparing the random number to the
+        # Metropolis-Hastings ratio (acceptance probability) (using
+        # "exp" because we calculated the logarithm of the
+        # Metropolis-Hastings ratio before)
+        if (r < exp(log.acceptance)) {
+
+            # if accepted:
+            # change the current value of theta to the proposed theta
+            theta.current <- theta.proposed
+
+            # updated the current value of the target
+            target.theta.current <- target.theta.proposed
+
+            # update number of accepted proposals
+            accepted <- accepted + 1
+        }
+
+        # add the current theta to the vector of samples
+        # Note that we use `rbind` in order to deal with multivariate 
+        # target. So if `theta` is a vector then `samples` is a matrix.
+        samples <- rbind(samples, theta.current, deparse.level=0)
+
+        # print current state of chain and acceptance rate
+        # use paste() to deal with the case where `theta` is a vector
+        message("iteration: ", i.iteration, ", chain:", paste(theta.current, collapse=" "),
+                ", acceptance rate:", accepted / i.iteration)
+
+    }
+
+    # return the trace of the chain (i.e., the vector of samples)
+    return(samples)
+}
+```
+
+```{r run MCMC from normal, message=FALSE}
+#logged normal probability density
+dnorm.log <- function(theta) {
+   return(dnorm(x = theta, mean = 0, sd = 1, log = TRUE))
+}
+
+#initialise and run the MCMC sampler
+starting.value <- 1 # starting value for MCMC
+sigma <- 1 # standard deviation of MCMC
+iter <- 1000
+trace <- my_mcmcMH(target = dnorm.log, init.theta = starting.value,
+   proposal.sd = sigma, n.iterations = iter)
+
+```
+
+```{r normal trace, caption='Trace plot for MCMC run with proposal distribution that is gaussian fitted to data drawn from the normal distribution'}
+plot(trace, type = "l")
+```
+
+```{r hist trace, caption='Histogram of the trace with the known data distribution superimposed over the top'}
+hist(trace, freq = FALSE)
+curve(dnorm, from = -4, to = 4, col="red", add=TRUE)
+```
+
+#Sampling from the posterior
+
+```{r Posterior function}
+
+# This is a function that takes 4 arguments:
+# - fitmodel, a fitmodel object that defines the model dynamics,
+#   prior and likelihoods.
+# - theta, a named vector of parameters
+# - init.state,  a named vector of initial state
+# - data, the data set we are fitting the model to
+# It should return the posterior for the given model, parameters,
+# initial state and data.
+my_dLogPosterior <- function(fitmodel, theta, init.state, data) {
+
+    log.prior <- fitmodel$dprior(theta, log=TRUE)
+
+    log.likelihood <- dTrajObs(fitmodel, theta, init.state, data, log=TRUE)
+    
+    log.posterior <- log.likelihood -   log.prior
+
+    return(log.posterior)
+}
+
+#Fix all parameters except for R0
+my_dLogPosterior_R0_epi1 <- function(R0) {
+
+  return(my_dLogPosterior(fitmodel = SIR,
+                          theta = c(R0 = R0, D_inf = 2),
+                          init.state = c(S = 999, I = 1, R = 0),
+                          data = epi1))
+}
+
+#Check
+my_dLogPosterior_R0_epi1(R0 = 3)
+```
+
+```{r samples SIR RO posterior}
+trace <- my_mcmcMH(target = my_dLogPosterior_R0_epi1, # target distribution
+                   init.theta = 1, # intial parameter guess
+                   proposal.sd = 0.1, # standard deviation of
+                                      # Gaussian proposal: 0.1
+                   n.iterations = 5000) # number of iterations
+```

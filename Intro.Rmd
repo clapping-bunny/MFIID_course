@@ -241,6 +241,7 @@ SIR_bd_forced$dprior <- function (theta, log = FALSE)
 ```
 
 ```{r update parameters - b/d, results=FALSE, message=FALSE}
+#Explore effect this has - just birth death
 #Load parameters
 theta <- c(R0 = 2, D_inf = 2, b=1/80, d=1/80, period=1, amplitude=0)
 init.state <- c(S = 999, I = 1, R = 0)
@@ -248,12 +249,16 @@ times <- 1:100
 ```
 
 ```{r sim update parameters - b/d, include=FALSE}
-#Explore effect this has - just birth death
 plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+```
+
+```{r plot b/d}
+#plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
 plot_fit$plot
 ```
 
 ```{r update parameters - forced, results=FALSE, message=FALSE}
+#Explore effect this has - seasonal forcing
 #Load parameters
 theta <- c(R0 = 2, D_inf = 2, b=0, d=0, period=10, amplitude=0.5)
 init.state <- c(S = 999, I = 1, R = 0)
@@ -261,8 +266,11 @@ times <- 1:100
 ```
 
 ```{r update sim - forced, include=FALSE}
-#Explore effect this has - just birth death
+
 plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+```
+
+```{r plot forced}
 plot_fit$plot
 ```
 
@@ -277,5 +285,8 @@ times <- 1:100
 ```{r update sim - b/d, forced, include=FALSE}
 #Explore effect this has - just birth death
 plot_fit <- plotFit(SIR_bd_forced, theta, init.state, epi1, n.replicates=100, plot=FALSE)
+```
+
+```{r plot b/d forced}
 plot_fit$plot
 ```
