@@ -1,0 +1,72 @@
+---
+title: "Modelling Interlude"
+author: "Sam Abbott"
+date: "03/10/2016"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, echo=TRUE, message=FALSE, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+
+#install.packages('coda')
+library(coda)
+```
+
+#Introduction
+
+[**Lecture slides**](http://sbfnk.github.io/mfiidd/slides/sto_2016.pdf)
+
+```{r load models}
+data(SEITL_deter)
+data(SEITL_stoch)
+```
+
+```{r deterministic simulation, message=FALSE, results='hide', caption='Deterministic simulation of SEITL model with measurement uncertainty and an intial guess of model parameters'}
+theta.guess3 <- c(R0 = 10, D_lat = 2, D_inf = 2, alpha = 0.4, D_imm = 13, rho = 0.7)
+init.state.bad.guess <- c(S = 250, E = 0, I = 4, T = 0, L = 30, Inc = 0)
+plotFit(SEITL_deter, theta.guess3, init.state.bad.guess, data = FluTdC1971)
+
+plotFit(SEITL_deter, theta.guess3, init.state.bad.guess, data = FluTdC1971, n.replicates = 100)
+```
+
+```{r stoch simulation single, message=FALSE, results='hide', caption='stochastic simulation of SEITL model with measurement uncertainty and an intial guess of model parameters'}
+plotFit(SEITL_stoch, theta.guess3, init.state.bad.guess, data = FluTdC1971, 
+    n.replicates = 100)
+```
+
+```{r stoch simulation, message=FALSE, results='hide', caption='stochastic simulation of SEITL model with measurement uncertainty and an intial guess of model parameters; Showing all modelled populations'}
+plotFit(SEITL_stoch, theta.guess3, init.state.bad.guess, data = FluTdC1971, all.vars = TRUE, n.replicates=100)
+```
+
+#Exponential vs Erlanf distributions
+
+- assuming transitions happen at a constant rate implies that the process is memoryless
+- to include a memory affect swap expoential with an erlang distribution
+- This distribution is parametrised by its mean mm and shape kk and can be modelled by kk consecutive sub-stages, each being exponentially distributed with mean m/km/k.
+- memory effect added for the cellular response
+
+
+```{r load models erlang}
+data(SEIT4L_deter)
+data(SEIT4L_stoch)
+```
+
+```{r det sim: Erlang, message=FALSE, results='hide', caption='Deterministic simulation of SEITL model with measurement uncertainty and an intial guess of model parameters. Erlang distribution for treatment response'}
+init.state.guess.SEIT4L <- c(S = 279, E = 0, I = 2, T1 = 3, T2 = 0, T3 = 0, 
+    T4 = 0, L = 0, Inc = 0)
+plotFit(SEIT4L_stoch, theta.guess3, init.state.guess.SEIT4L, data = FluTdC1971, 
+    n.replicates = 100, non.extinct = c("E", "I"))
+```
+

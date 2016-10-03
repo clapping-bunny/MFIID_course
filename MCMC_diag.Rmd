@@ -246,7 +246,7 @@ Always run mulitple chains with differing initial conditions
 data(SIR_exp)
 ```
 
-```{r  wrapper and MCMC run}
+```{r  wrapper and MCMC run, cache=TRUE}
 my_dLogPosterior_exp_epi3 <- function(theta) {
 
     return(my_dLogPosterior(fitmodel = SIR_exp,
@@ -258,7 +258,7 @@ my_dLogPosterior_exp_epi3 <- function(theta) {
 
 trace <- my_mcmcMH(target = my_dLogPosterior_exp_epi3,
     init.theta = c(R0 = log(1), D_inf = log(2)),
-    proposal.sd = c(0.1, 0.01),
+    proposal.sd = c(0.01, 0.01),
     n.iterations = 10000)
 ```
 
@@ -279,3 +279,58 @@ effectiveSize(mcmc.trace)
 ###Truncated proposal distributions
 
 - truncate to real world values
+- have to be aware for asymmetric metric proposal and to account for this
+
+```{r  truncated proposals, message=FALSE, cache=TRUE}
+my_dLogPosterior_epi3 <- function(theta) {
+
+    return(my_dLogPosterior(fitmodel = SIR,
+        theta = theta,
+        init.state = c(S = 999, I = 1, R = 0),
+        data = epi3))
+
+}
+
+trace <- mcmcMH(target = my_dLogPosterior_epi3,
+    init.theta = c(R0 = 1, D_inf = 2),
+    proposal.sd = c(0.1, 0.01),
+    n.iterations = 1000,
+    limits = list(lower = c(R0 = 0, D_inf = 0)))
+```
+
+```{r  convert to coda and summarise - truncated}
+mcmc.trace <- mcmc(trace)
+
+#Summarise
+summary(mcmc.trace)
+
+#Acceptance rates
+acceptanceRate <- 1 - rejectionRate(mcmc.trace)
+acceptanceRate
+
+#effective sample size - i.e number of independent samples 
+effectiveSize(mcmc.trace)
+```
+
+##Adapting the proposal distribution
+
+The best proposal distribution is the one that best matches the target distribution. While we cannot know this in advance, we can use trial MCMC runs to learn about the target distribution, and use this information to come up with a better proposal distribution. This does mean, however, that we waste computational time in the discarded trial runs, and this method needs to be applied carefully.
+
+```{r  covariace matrix}
+trace$covmat.empirical
+```
+
+The idea is the following: we let the MCMC run for a while and monitor the acceptance rate. After adapt.size.start iterations, we start adapting the size of the proposal distribution, that is we scale it to smaller/larger steps depending if the acceptance is too small/large. This is done until adapt.shape.start proposals have been accepted, at which point we take the empirical covariance matrix and start adapting the shape of the proposal distribution to it. Over time, we must make fewer and fewer changes to the size, because if we kept adapting the size we would break the Metropolis-Hastings algorithm. This is regulated by adapt.size.cooling. The closer this is to 1, the slower we stop adapting the size (and, accordingly, the longer we have to run the chain).
+
+```{r  adaptive MCMC sample run, cache=TRUE}
+trace <- mcmcMH(target = my_dLogPosterior_epi3,
+    init.theta = c(R0 = 1, D_inf = 2),
+    proposal.sd = c(1, 0.5),
+    n.iterations = 5000,
+    adapt.size.start = 100,
+    adapt.shape.start = 500,
+    adapt.size.cooling=0.999,
+    limits = list(lower = c(R0 = 0, D_inf = 0)))
+```
+
+- conversion fails? 
