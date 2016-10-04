@@ -1,0 +1,362 @@
+---
+title: "Model Comparision"
+author: "Sam Abbott"
+date: "04/10/2016"
+output: html_document
+   number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, echo=TRUE, message=FALSE, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+
+#install.packages('coda')
+library(coda)
+```
+
+#Introduction
+
+Slow covergance occurs when:
+- If you initialise the MCMC with a init.theta far from the region of high posterior density, the chain might take a long time to reach this region of interest and you will have to burn a lot of iterations.
+- If the covariance matrix of the Gaussian proposal is very different from the posterior, this will result in poor mixing and sub-optimal acceptance rates and you will have to run your chain for longer (or thin it
+
+Approach:
+
+- MCMC on determinisitc model and learn from output of the chain to initialise the stochastic model
+- deterministic approximates the stochastic model
+
+#Setting the MCMC
+
+- use adaptive MCMC
+
+```{r set up MCMC, echo=TRUE, message=FALSE}
+# the fitmodel
+data(SEITL_deter)
+
+# wrapper for posterior
+my_posteriorTdC <- function(theta) {
+    
+    my_fitmodel <- SEITL_deter
+    my_init.state <- c(S = 279, E = 0, I = 2, T = 3, L = 0, Inc = 0)
+    # note that for the SEIT4L model there are 4 state variables for the T
+    # compartment my_init.state <- c('S' = 279, 'E' = 0, 'I' = 2, 'T1' = 3, 'T2'
+    # = 0, 'T3' = 0, 'T4' = 0, 'L' = 0, 'Inc' = 0)
+    
+    return(logPosterior(fitmodel = my_fitmodel, theta = theta, init.state = my_init.state, 
+        data = FluTdC1971, margLogLike = dTrajObs, log = TRUE))
+    
+}
+
+# theta to initialise the MCMC
+init.theta <- c(R0 = 2, D_lat = 2, D_inf = 2, alpha = 0.8, D_imm = 16, rho = 0.85)
+
+# diagonal elements of the covariance matrix for the Gaussian proposal
+proposal.sd <- c(R0 = 1, D_lat = 0.5, D_inf = 0.5, alpha = 0.1, D_imm = 2, rho = 0.1)
+
+# lower and upper limits of each parameter
+lower <- c(R0 = 0, D_lat = 0, D_inf = 0, alpha = 0, D_imm = 0, rho = 0)
+upper <- c(R0 = Inf, D_lat = Inf, D_inf = Inf, alpha = 1, D_imm = Inf, rho = 1)
+
+# number of iterations for the MCMC
+n.iterations <- 5000
+
+# additional parameters for the adaptive MCMC, see ?mcmcMH for more details
+adapt.size.start <- 100
+adapt.size.cooling <- 0.999
+adapt.shape.start <- 200
+```
+
+#MCMC parameter tuning
+
+```{r run MCMC, echo=TRUE, message=FALSE}
+# run the MCMC
+my_mcmc.TdC <- mcmcMH(target = my_posteriorTdC,
+                      init.theta = init.theta,
+                      proposal.sd = proposal.sd,
+                      limits = list(lower = lower,upper = upper),
+                      n.iterations = n.iterations,
+                      adapt.size.start = adapt.size.start,
+                      adapt.size.cooling = adapt.size.cooling,
+                      adapt.shape.start = adapt.shape.start)
+```
+
+#Short run analysis
+
+```{r short analysis trace MCMC, echo=TRUE, message=FALSE}
+# convert to a mcmc object for coda
+trace <- mcmc(my_mcmc.TdC$trace)
+
+# compute the acceptance rate
+1 - rejectionRate(trace)
+
+# plot the trace
+xyplot(trace)
+
+# Let's find a suitable burning:
+plotESSBurn(trace)
+
+# Let's create a new trace without the burning
+trace.burn <- burnAndThin(trace, burn = 1000)
+xyplot(x = trace.burn)
+
+# Let's check the ESS
+effectiveSize(trace.burn)
+
+# autocorrelation plot
+acfplot(x = trace.burn, lag.max = 60)
+
+# Let's create a thinned trace
+trace.burn.thin <- burnAndThin(trace.burn, thin = 20)
+xyplot(x = trace.burn.thin)
+
+# Let's check the ESS
+effectiveSize(trace.burn.thin)
+
+# new autocorrelation plot
+acfplot(x = trace.burn.thin, lag.max = 60)
+
+# The unthinned trace
+summary(trace.burn)
+
+# The thinned trace
+summary(trace.burn.thin)
+
+#compare
+plotPosteriorDensity(list(unthinned = trace.burn, thinned = trace.burn.thin))
+```
+
+#Long run analysis
+
+```{r long analysis trace MCMC, echo=TRUE, message=FALSE}
+# load mcmc output
+data(mcmc_TdC_deter_longRun)
+
+# create mcmc objects for both traces
+trace1 <- mcmc(mcmc_SEITL_theta1$trace)
+trace2 <- mcmc(mcmc_SEITL_theta2$trace)
+
+# combine traces as mcmc.list object
+trace <- mcmc.list(list(trace1, trace2))
+
+# let's have a look
+head(trace, 3)
+
+
+# acceptance rate
+1 - rejectionRate(trace)
+
+# close to the optimal value of 0.234
+
+# ESS
+effectiveSize(trace)
+#due to the high sample size can be very generous in the choice of burnin and thinning
+
+# plot the traces
+xyplot(trace)
+
+trace.burn <- burnAndThin(trace, burn = 5000)
+
+# removing the burning increases the ESS
+effectiveSize(trace.burn)
+
+# autocorrelation
+acfplot(trace.burn, lag.max = 60)
+
+# Thinning: let's keep 1 iteration every 40
+trace.burn.thin <- burnAndThin(trace.burn, thin = 40)
+xyplot(trace.burn.thin)
+
+# Note that plotPosteriorDensity can take a list of mcmc.list It will plot
+# the different mcmc.list by combining their elements Let's plot the
+# combined unthinned trace vs the combined thinned trace.
+plotPosteriorDensity(list(unthinned = trace.burn, thinned = trace.burn.thin))
+
+#Due to high sample size thinning has almost no effect
+#Thinning should only be used for memory or time reasons
+
+densityplot(trace.burn.thin) 
+
+# the function summary combines the chains of a mcmc.list
+summary(trace.burn.thin)
+
+#Prior to this amalgimating step must check that the posterior is not multi model
+
+#assess fit of the model
+# load data
+data(FluTdC1971)
+
+# the same init.state as for the fit
+init.state <- c(S = 279, E = 0, I = 2, T = 3, L = 0, Inc = 0)
+
+# by default plotPosteriorFit summarize the fit of 100 thetas sampled from
+# the posterior
+plotPosteriorFit(trace = trace, fitmodel = SEITL_deter, init.state = init.state, 
+    data = FluTdC1971)
+
+# alternatively, one can plot the fit of the mean of the posterior (in this
+# case the observation is replicated 100 times)
+plotPosteriorFit(trace = trace, fitmodel = SEITL_deter, init.state = init.state, data = FluTdC1971, posterior.summary = "mean")
+
+# or using the maximum a posteriori (MAP) estimate
+plotPosteriorFit(trace = trace, fitmodel = SEITL_deter, init.state = init.state, data = FluTdC1971, posterior.summary = "max")
+```
+
+#Correlations
+```{r long analysis trace MCMC, echo=TRUE, message=FALSE}
+# levelplot doesn't accept `mcmc.list`, we pass the first `mcmc` only.
+levelplot(trace.burn.thin[[1]], col.regions = heat.colors(100))
+
+with(as.data.frame(trace.burn.thin[[1]]), quantile(R0/D_inf, probs = c(0.025, 0.25, 0.5, 0.75, 0.975)))
+
+#uniform priors means that values are unrealistic in this instance
+```
+
+- modify priors with prior information for improved realism
+
+```{r modify priors MCMC, echo=TRUE, message=FALSE}
+SEITL_deter$dprior <- function(theta) {
+    
+    # package with truncated normal distribution
+    library(truncnorm)
+    
+    log.prior.R0 <- dunif(theta[["R0"]], min = 1, max = 50, log = TRUE)
+    # normal distribution with mean = 2 and sd = 1 and truncated at 0
+    log.prior.latent.period <- log(dtruncnorm(theta[["D_lat"]], a = 0, b = Inf, 
+        mean = 2, sd = 1))
+    # normal distribution with mean = 2 and sd = 1 and truncated at 0
+    log.prior.infectious.period <- log(dtruncnorm(theta[["D_inf"]], a = 0, b = Inf, 
+        mean = 2, sd = 1))
+    log.prior.temporary.immune.period <- dunif(theta[["D_imm"]], min = 0, max = 50, 
+        log = TRUE)
+    log.prior.probability.long.term.immunity <- dunif(theta[["alpha"]], min = 0, 
+        max = 1, log = TRUE)
+    log.prior.reporting.rate <- dunif(theta[["rho"]], min = 0, max = 1, log = TRUE)
+    
+    return(log.prior.R0 + log.prior.latent.period + log.prior.infectious.period + 
+        log.prior.temporary.immune.period + log.prior.probability.long.term.immunity + 
+        log.prior.reporting.rate)
+    
+}
+```
+
+# Informative priors
+
+```{r info priors MCMC, echo=TRUE, message=FALSE}
+# create mcmc object
+trace.info1 <- mcmc(mcmc_SEITL_infoPrior_theta1$trace)
+trace.info2 <- mcmc(mcmc_SEITL_infoPrior_theta2$trace)
+
+# combine in a mcmc.list
+trace.info <- mcmc.list(trace.info1, trace.info2)
+
+# burn and thin as the chain with uniform prior (see above sections)
+trace.info.burn.thin <- burnAndThin(trace.info, burn = 5000, thin = 40)
+
+# check that both chains converged to the same posterior
+plotPosteriorDensity(trace.info.burn.thin)
+
+# compare the effect of informative priors on the posterior distribution
+plotPosteriorDensity(list(unif = trace.burn.thin, info = trace.info.burn.thin))
+```
+
+#Model Comparision
+
+```{r compare DIC, echo=TRUE, message=FALSE}
+
+# combine the two chains in a data frame
+trace.combined <- ldply(trace.info.burn.thin)
+
+# take the mean of theta
+theta.bar <- colMeans(trace.combined[SEITL_deter$theta.names])
+print(theta.bar)
+
+# compute its log-likelihood
+init.state <- c(S = 279, E = 0, I = 2, T = 3, L = 0, Inc = 0)
+log.like.theta.bar <- dTrajObs(SEITL_deter, theta.bar, init.state, data = FluTdC1971, log = TRUE)
+print(log.like.theta.bar)
+
+# and its deviance
+D.theta.bar <- -2 * log.like.theta.bar
+print(D.theta.bar)
+
+# the effective number of parameters
+p.D <- var(-2 * trace.combined$log.likelihood)/2
+print(p.D)
+
+# and finally the DIC
+DIC <- D.theta.bar + 2 * p.D
+print(DIC)
+
+```
+
+# Posterior predicitve P checks
+
+```{r max obs in data, echo=TRUE, message=FALSE}
+# This is a function that takes 4 arguments:
+# - trace, a data frame containing samples from the posterior
+#   distribution, one column per parameter 
+# - n.samples, the number of samples to take
+# - fitmodel, the model we use to generate replicates
+# - init.state, the initial state
+# - data, the data set we have fit the model to
+# It returns the two-sided p-value for the maximal observation
+# in the data with respect to the model.
+my_postPredCheck <- function(trace, n.samples, fitmodel, init.state, data) {
+
+    # calculate maximum in obs column of data
+    max.data <- max(data$obs)
+    
+    # draw n.samples random numbers between 1
+    # and n.samples using the `samples` function 
+    samples <- sample(seq_len(nrow(trace)), n.samples)
+
+    # initialise vector of model maxima
+    max.model <- c()
+    
+    # loop over samples
+    for (i in samples) {
+
+        # get i'th column from the trace, unlist
+        # (to convert to a vector) and assign to parameter
+        # vector theta
+        theta <- unlist(trace[i, ])
+
+        # use rObsTraj to generate
+        # observation trajectory using theta
+        obs.traj <- rTrajObs(fitmodel, theta, init.state, data$time)
+
+        # calculate maximum in model and add to max.model vector
+        max.model <- c(max.model, max(obs.traj$obs))
+    }
+
+    # calculate quantiles of model maxima
+    max.model.quant <- quantile(max.model, probs = c(0.025, 0.975))
+
+    # calculate 2-sided p-value,
+    # that is the proportion of elements of max.model which are
+    # either greater or equal or less or equal (whichever is
+    # less) and  multiply by 2 (because it is a 2-sided test)
+    pvalue <- min(sum(max.model <= max.data),
+                  sum(max.model >= max.data)) / n.samples * 2
+    
+    # return two-sided p-value
+    return(pvalue)
+}
+
+init.state <- c(S = 279, E = 0, I = 2, T = 3, L = 0, Inc = 0)
+my_postPredCheck(trace = mcmc_SEITL_theta1$trace[SEITL_deter$theta.names],
+                 n.samples = 100,
+                 fitmodel = SEITL_deter,
+                 init.state = init.state,
+                 data = FluTdC1971)
+```
