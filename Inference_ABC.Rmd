@@ -1,0 +1,331 @@
+---
+title: "Inference with ABC"
+author: "Sam Abbott"
+date: "05/10/2016"
+output: html_document
+---
+
+```{r load packages, echo=TRUE, message=FALSE, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+
+#install.packages('coda')
+library(coda)
+
+#install.packages("pomp")
+library("pomp")
+```
+
+#Introduction
+
+[**Lecture slides**](http://sbfnk.github.io/mfiidd/slides/abc_slides.pdf)
+
+1. write some functions to evaluate summary statistics
+2. use the summary statistics to calculate a distance between model runs and the data
+3. approximate the SEITL model posterior using ABC-MCMC
+4. compare an approximated posterior from ABC with the true posterior
+
+**Model review** 
+
+![Deterministic model summary](figures/deter_summary.png)
+
+![Stochastic model summary](figures/stoch_summary.png)
+
+# Background
+
+- it replaces observations with summary statistics. Unless these summary statistics are sufficient, this leads to a possibly less informative posterior density.
+- we are accepting simulations that are within an acceptance window of the data. Unless the acceptance tolerances are equal to 0, this leads to biased samples from the posterior.
+
+- there is minimal cost when fitting deterministic models using MCMC so no real reason to use abc
+
+```{r load data, echo=TRUE}
+data(SEITL_stoch)
+data(FluTdC1971)
+
+plotTraj(data = FluTdC1971)
+```
+
+# Summary statistics
+
+##Example summary statistics
+
+```{r example summary stats, echo=TRUE}
+# maximum incidence before day 13
+ssMax_0_12 <- function(traj) {
+    return(max(traj[traj$time < 13, ]$obs, na.rm = T))
+}
+
+# maximum incidence between day 13 and day 24
+ssMax_13_24 <- function(traj) {
+    return(max(traj[traj$time > 12 & traj$time < 25, ]$obs, na.rm = T))
+}
+
+# maximum incidence between day 25 and day 36
+ssMax_25_36 <- function(traj) {
+    return(max(traj[traj$time > 24 & traj$time < 37, ]$obs, na.rm = T))
+}
+
+# maximum incidence after day 36
+ssMax_37_60 <- function(traj) {
+    return(max(traj[traj$time > 36, ]$obs, na.rm = T))
+}
+
+# cumulative incidence before day 13
+ssSum_0_12 <- function(traj) {
+    return(sum(traj[traj$time < 13, ]$obs, na.rm = T))
+}
+
+# cumulative incidence between day 13 and day 24
+ssSum_13_24 <- function(traj) {
+    return(sum(traj[traj$time > 12 & traj$time < 25, ]$obs, na.rm = T))
+}
+
+# cumulative incidence between day 25 and day 36
+ssSum_25_36 <- function(traj) {
+    return(sum(traj[traj$time > 24 & traj$time < 37, ]$obs, na.rm = T))
+}
+
+# cumulative incidence after day 36
+ssSum_37_60 <- function(traj) {
+    return(sum(traj[traj$time > 36, ]$obs, na.rm = T))
+}
+
+# maximum incidence along the whole trajectory
+ssMax <- function(traj) {
+    return(max(traj$obs, na.rm = T))
+}
+
+# timing of the epidemic peak
+ssMaxTime <- function(traj) {
+    return(min(traj[which(traj$obs == max(traj$obs)), ]$time, na.rm = T))
+}
+
+# final size of the epidemic
+ssSize <- function(traj) {
+    return(sum(traj$obs, na.rm = T))
+}
+```
+
+```{r test var in summary stats, echo=TRUE}
+theta <- c(R0 = 2, D_lat = 2, D_inf = 2, alpha = 0.9, D_imm = 13, rho = 0.85)
+init.state <- c(S = 250, E = 0, I = 4, T = 0, L = 30, Inc = 0)
+hist(replicate(100, ssSize(rTrajObs(SEITL_stoch, theta, init.state, FluTdC1971$time))), xlab = "summary statistic")
+```
+
+#Distance between observed and simulated summary statistics
+
+```{r example distance functions, echo=TRUE}
+# mean absolute distance
+ssMeanAbsDistance <- function(sum.stats, data.obs, model.obs) {
+
+    # calculate the absolute distance of each summary statistic,
+    # and take the mean
+    res <- mean(sapply(sum.stats, function(x) {
+        abs(x(model.obs) - x(data.obs))
+    }))
+
+    # return mean distance
+    return(res)
+
+}
+
+# vector of absolute distances
+ssAbsDistances <- function(sum.stats, data.obs, model.obs) {
+
+    # calculate the absolute distance of each summary statistic
+    res <- sapply(sum.stats, function(x) {
+        abs(x(model.obs) - x(data.obs))
+    })
+
+    # set names of the vector of distances
+    names(res) <- names(sum.stats)
+
+    # return vector of distance
+    return(res)
+
+}
+
+# mean relative distance
+ssMeanRelDistance <- function(sum.stats, data.obs, model.obs) {
+
+    # calculate the relative distance of each summary statistic,
+    # and take the mean 
+    res <- mean(sapply(sum.stats, function(x) {
+        abs((x(model.obs) - x(data.obs)) / x(data.obs))
+    }))
+
+    # return mean distance
+    return(res)
+
+}
+
+# vector of relative distances
+ssRelDistances <- function(sum.stats, data.obs, model.obs) {
+
+    # calculate the relative distance of each summary statistic,
+    res <- sapply(sum.stats, function(x) {
+        abs((x(obs.traj) - x(data)) / x(data))
+    })
+
+    # set names of the vector of distances
+    names(res) <- names(sum.stats)
+
+    # return vector of distance
+    return(res)
+
+}
+
+#Test summary distance functions returns a sensible value
+simu <- rTrajObs(SEITL_stoch, theta, init.state, FluTdC1971$time)
+ssMeanRelDistance(sum.stats = list(ssSize, ssMax),
+                  data.obs = FluTdC1971,
+                  model.obs = simu)
+```
+
+```{r distance fitmodel and data, echo=TRUE}
+computeDistanceABC(sum.stats = list(ssSize, ssMax),
+                   distanceABC = ssMeanRelDistance,
+                   fitmodel = SEITL_stoch,
+                   theta = theta,
+                   init.state = init.state,
+                   data = FluTdC1971) 
+
+hist(replicate(100, computeDistanceABC(sum.stats = list(ssSize, ssMax),
+                                       distanceABC = ssMeanRelDistance,
+                                       fitmodel = SEITL_stoch,
+                                       theta = theta,
+                                       init.state = init.state,
+                                       data = FluTdC1971)),
+     xlab = "distance")
+```
+
+**Ideal summary statistic**
+1. Vary alot between parameter values (so the acceptance window can distinguish between good and bad fits)
+2. limited variation within parameter values (so you dont have to reject that many runs from good parameters)
+
+#ABC posterior estimate
+
+```{r ABC log post, echo=TRUE}
+ABCLogPosterior(epsilon = 5,
+                sum.stats = list(ssMax, ssSize),
+                distanceABC = ssMeanRelDistance,
+                fitmodel = SEITL_stoch,
+                theta = theta,
+                init.state = init.state,
+                data = FluTdC1971)
+```
+
+# ABC-MCMC on the stochastic model
+
+
+```{r wrapper function, echo=TRUE}
+my_ABCLogPosterior_tdc <- function(theta) {
+
+    init.state = c(S = 279, E = 0, I = 2, T1 = 3, T2 = 0, T3 = 0, T4 = 0, L = 0, Inc = 0)
+
+    # log posterior with several summary statistics, distance given
+    # by the mean relative distance in the summary statistics,
+    # tolerance of 2
+    log.posterior <-
+        ABCLogPosterior(epsilon = 2,
+                        sum.stats = list(ssSize = ssSize,
+                                         ssMax = ssMax,
+                                         ssMaxTime = ssMaxTime,
+                                         ssSum_13_24 = ssSum_13_24,
+                                         ssMax_25_36 = ssMax_25_36,
+                                         ssSum_37_60 = ssSum_37_60),
+                        distanceABC = ssMeanRelDistance,
+                        fitmodel = SEIT4L_stoch,
+                        theta = theta,
+                        init.state = init.state,
+                      data = FluTdC1971)
+
+    return(log.posterior)
+}
+
+my_ABCLogPosterior_tdc(theta)
+```
+
+```{r abc-MCMC, echo=TRUE, message=FALSE}
+abc.trace <- mcmcMH(target = my_ABCLogPosterior_tdc,
+                    init.theta = theta,
+                    n.iterations = 1000,
+                    limits = list(lower = c(R0 = 1, D_lat = 0, D_inf = 0, D_imm = 0, alpha = 0, rho = 0),
+                                  upper = c(R0 = Inf, D_lat = Inf, D_inf = Inf, D_imm = Inf, alpha = 1, rho = 1)))
+```
+
+
+#Comparision with exact posterior
+
+```{r comparision with exact MCMC, cache=TRUE}
+# load results of deterministic fit
+data(mcmc_TdC_deter_longRun)
+
+# Let's use the first trace only, no need to burn or thin
+trace <- mcmc_SEITL_infoPrior_theta1$trace
+
+# we will start the pMCMC at the mean posterior estimate of the
+# deterministic fit
+deter.theta <- colMeans(trace[SEITL_stoch$theta.names])
+
+# and we take the empirical covariance matrix for the Gaussian kernel
+# proposal
+covmat <- mcmc_SEITL_infoPrior_theta1$covmat.empirical
+
+# initial state
+init.state <- c(S = 279, E = 0, I = 2, T = 3, L = 0, Inc = 0)
+
+#results from the deterministic run
+summary(mcmc(mcmc_SEITL_theta1$trace))
+
+#distance from the data at the posterior of the mean
+data(SEITL_deter)
+hist(replicate(100, computeDistanceABC(sum.stats = list(ssSize, ssMax),
+                                       distanceABC = ssMeanRelDistance,
+                                       fitmodel = SEITL_deter,
+                                       theta = deter.theta,
+                                       init.state = init.state,
+                                       data = FluTdC1971)),
+     xlab = "distance")
+
+#wrapper for ABC function with epislon = 0.3     
+my_ABCLogPosterior_tdc_det <- function(theta) {
+
+    init.state = c(S = 279, E = 0, I = 2, T1 = 3, T2 = 0, T3=0, T4=0,L = 0, Inc = 0)
+
+    # log posterior with several summary statistics, distance given
+    # by the mean relative distance in the summary statistics,
+    # acceptance window of 0.3
+    log.posterior <-
+        ABCLogPosterior(epsilon = 0.3,
+                        sum.stats = list(ssSize = ssSize,
+                                         ssMax = ssMax,
+                                         ssMaxTime = ssMaxTime,
+                                         ssSum_13_24 = ssSum_13_24,
+                                         ssMax_25_36 = ssMax_25_36,
+                                         ssSum_37_60 = ssSum_37_60),
+                        distanceABC = ssMeanRelDistance,
+                        fitmodel = SEIT4L_deter,
+                        theta = theta,
+                        init.state = init.state,
+                      data = FluTdC1971)
+
+    return(log.posterior)
+}
+
+#generate samples form abc
+abc.trace <- mcmcMH(target = my_ABCLogPosterior_tdc_det,
+                    init.theta = deter.theta,
+                    covmat = covmat, 
+                    n.iterations = 1000,
+                    limits = list(lower = c(R0 = 1, D_lat = 0, D_inf = 0, D_imm = 0, alpha = 0, rho = 0),
+                    upper = c(R0 = Inf, D_lat = Inf, D_inf = Inf, D_imm = Inf, alpha = 1, rho = 1)))
+
+abc.mcmc.trace <- mcmc(abc.trace$trace)
+```

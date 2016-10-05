@@ -1,0 +1,144 @@
+---
+title: "POMP"
+author: "Sam Abbott"
+date: "05/10/2016"
+output: html_document
+---
+
+```{r load packages, echo=TRUE, message=FALSE, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+# install.packages("devtools")
+library(devtools)
+
+# install_github("sbfnk/fitR@fitcourse_2016")
+library(fitR)
+
+#install.packages('coda')
+library(coda)
+
+#install.packages("pomp")
+library("pomp")
+```
+
+
+#Introduction
+
+[**Lecture slides**](http://sbfnk.github.io/mfiidd/slides/revision_slides.pdf)
+
+- learn how to code a model in pomp using C snippets or R code
+- explore how to use a particle filter and pMCMC using pomp
+
+
+![Available fitting methods](figures/Aval_fitting_methods.png)
+```{r POMP example model, echo=TRUE}
+#Code a model in POMP
+
+example(SEITL_pomp)
+```
+
+#Simulating the model and estimating the likelihood
+
+```{r initial parameters and values, echo=TRUE}
+theta <- c(R0 = 2, D_lat = 2, D_inf = 2, alpha = 0.9, D_imm = 13, rho = 0.85)
+SEITL.init.state <- c(S.0 = 250, E.0 = 0, I.0 = 4, T.0 = 0, L.0 = 30, Inc.0 = 0)
+SEIT4L.init.state <- c(S.0 = 250, E.0 = 0, I.0 = 4, T1.0 = 0, T2.0 = 0, T3.0 = 0, 
+    T4.0 = 0, L.0 = 30, Inc.0 = 0)
+```
+
+#Deterministic trajectory
+
+- trajectory simulates all deterministic model ignoring all process or measurement stochasticity
+```{r determinsitic traj, echo=TRUE}
+SEITL.traj <- trajectory(SEITL_pomp, params = c(theta, SEITL.init.state), as.data.frame = TRUE)
+plotTraj(SEITL.traj)
+```
+
+#Stochastic Trajectory
+
+- simulates the stochastic model
+- `obs = true` and `states = true` indicate that the model states and observations should be returned
+
+```{r stoch traj, echo=TRUE}
+SEITL.sim <- simulate(SEITL_pomp, params = c(theta, SEITL.init.state), obs = TRUE, 
+    states = TRUE, as.data.frame = TRUE)
+
+plotTraj(SEITL.sim)
+```
+
+#Particle filter
+
+```{r particle filter, echo=TRUE}
+pf <- pfilter(SEITL_pomp, params = c(theta, SEITL.init.state), Np = 400)
+logLik(pf)
+```
+
+#Model fitting by maximising the likelihood
+
+- frequentist fitting via max likelihood, no priors, single 'true' parameter set
+- ignores all process noise
+##Trajectory Matching
+
+## Trajectory matching
+
+```{r determinsitic max lik, echo=TRUE}
+SEITL.tm <- traj.match(SEITL_pomp, start = c(theta, SEITL.init.state), est = names(theta))
+logLik(SEITL.tm)
+
+class(SEITL.tm)
+```
+
+```{r sim based on det eval,eval=FALSE, echo=TRUE}
+SEITL.tm.sim <- simulate(SEITL.tm, nsim = 1000, as.data.frame = TRUE)
+plotTraj(SEITL.tm.sim, data = FluTdC1971, state.names = "obs")
+```
+
+```{r sim based on det include,include=FALSE, echo=TRUE}
+SEITL.tm.sim <- simulate(SEITL.tm, nsim = 10, as.data.frame = TRUE)
+plotTraj(SEITL.tm.sim, data = FluTdC1971, state.names = "obs")
+```
+
+## Maximum likelihood by iterated filtering (MIF)
+
+- fits the stochastic model to the data by maximising the likelihood using iterated filtering. The parameters to be fitted are randomly perturbed (via a pseudo random walk) and the likelihood estiamted with a particle filter. Smaller and smaller steps leads the parameters to converge on a likelihood estimate
+```{r MIF fit eval , eval=FALSE, echo=TRUE}
+prop.sd <- rep(0.01, length(theta))
+names(prop.sd) <- names(theta)
+
+SEITL.mf <- mif(SEITL.tm, Nmif = 50, Np = 1000, cooling.fraction.50 = 0.01, 
+    rw.sd = prop.sd)
+SEITL.mf.sim <- simulate(SEITL.mf, nsim = 10, as.data.frame = TRUE, include.data = TRUE)
+plotTraj(SEITL.mf.sim, data = FluTdC1971, state.names = "obs")
+```
+
+```{r MIF fit include, include=FALSE, echo=TRUE}
+prop.sd <- rep(0.01, length(theta))
+names(prop.sd) <- names(theta)
+
+SEITL.mf <- mif(SEITL.tm, Nmif = 50, Np = 1000, cooling.fraction.50 = 0.01, 
+    rw.sd = prop.sd)
+SEITL.mf.sim <- simulate(SEITL.mf, nsim = 10, as.data.frame = TRUE, include.data = TRUE)
+plotTraj(SEITL.mf.sim, data = FluTdC1971, state.names = "obs")
+```
+
+##Model fitting by sampling from the posterior distribution
+
+- i.e bayesian approach
+
+##Particle Markov chain monte carlo (pMCMC)
+
+```{r pmcmc, echo=TRUE, cache=TRUE}
+# run pMCMC with adaptive MCMC
+SEITL.pm <- pmcmc(SEITL.tm, Nmcmc = 5000, Np = 200, proposal = mvn.rw.adaptive(rw.sd = prop.sd, 
+    scale.start = 100, shape.start = 200), max.fail = Inf)
+trace <- conv.rec(SEITL.pm, names(theta))
+```
+
+
+```{r pmcmc diagnostics, echo=TRUE}
+# acceptance rate
+1 - rejectionRate(trace)
+
+plot(trace)
+```

@@ -3,7 +3,7 @@ title: "Model Comparision"
 author: "Sam Abbott"
 date: "04/10/2016"
 output: html_document
-   number_sections: true
+
 ---
 
 ```{r setup, include=FALSE}
@@ -212,7 +212,7 @@ plotPosteriorFit(trace = trace, fitmodel = SEITL_deter, init.state = init.state,
 ```
 
 #Correlations
-```{r long analysis trace MCMC, echo=TRUE, message=FALSE}
+```{r correlations MCMC, echo=TRUE, message=FALSE}
 # levelplot doesn't accept `mcmc.list`, we pass the first `mcmc` only.
 levelplot(trace.burn.thin[[1]], col.regions = heat.colors(100))
 
